@@ -1,0 +1,2 @@
+Requirement already satisfied: pillow-heif in ./wanenv/lib/python3.10/site-packages (0.22.0)
+Requirement already satisfied: pillow>=10.1.0 in ./wanenv/lib/python3.10/site-packages (from pillow-heif) (10.4.0)

@@ -3,6 +3,10 @@ import os
 from datetime import datetime
 from PIL import Image
 import subprocess
+from pillow_heif import register_heif_opener
+
+# Register HEIF opener with PIL
+register_heif_opener()
 
 OUTPUT_DIR = "outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -40,6 +44,7 @@ def generate_video(image_path, prompt, resolution, task):
     # Add image parameter only for image2video task
     if task == "Image2Video":
         input_image = os.path.join(OUTPUT_DIR, f"input_{timestamp}.jpg")
+        # Open and convert image to RGB, supporting HEIC format
         img = Image.open(image_path).convert("RGB")
         img.save(input_image)
         command.extend(["--image", input_image])
