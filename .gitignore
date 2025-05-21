@@ -1,6 +1,30 @@
 cat > ~/Desktop/WanFiles/.gitignore <<EOF
 # Ignore virtual environments
 wanenv/
+venv/
+env/
+.env/
+
+# Large binary files
+*.so
+*.so.*
+*.dylib
+*.dll
+
+# CUDA and NVIDIA libraries
+**/nvidia/
+**/cuda*/
+**/cublas*/
+**/cudnn*/
+**/nccl*/
+
+# PyTorch libraries
+**/torch/lib/
+
+# Other large binaries
+**/ffmpeg*
+**/flash_attn*
+
 *.pyc
 __pycache__/
 *.pth

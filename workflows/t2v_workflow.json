@@ -1,0 +1,26 @@
+{
+  "3": {
+    "class_type": "WanT2V",
+    "inputs": {
+      "prompt": "A beautiful sunset over a calm ocean, waves gently rolling, birds flying in the distance",
+      "negative_prompt": "blurry, low quality, distorted",
+      "resolution": "1280*720",
+      "num_inference_steps": 40,
+      "guidance_scale": 7.5,
+      "seed": -1,
+      "sample_shift": 5.0,
+      "model": "Wan2.1-T2V-14B"
+    }
+  },
+  "4": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "filename": "t2v_output",
+      "format": "mp4",
+      "video": [
+        "3",
+        0
+      ]
+    }
+  }
+}
