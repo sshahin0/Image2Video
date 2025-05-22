@@ -7,6 +7,8 @@ from pillow_heif import register_heif_opener
 import logging
 import sys
 import time
+import huggingface_hub
+from pathlib import Path
 
 # Set up logging to show in IDE
 logging.basicConfig(
@@ -23,7 +25,9 @@ logger = logging.getLogger(__name__)
 register_heif_opener()
 
 OUTPUT_DIR = "outputs"
+LORA_DIR = "lora_weights"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(LORA_DIR, exist_ok=True)
 
 # Define resolution mappings
 RESOLUTION_MAP = {
@@ -42,6 +46,30 @@ CHECKPOINT_MAP = {
     "Text2Video": "./Wan2.1-T2V-14B",
     "Image2Video": "./Wan2.1-I2V-14B-720P"
 }
+
+def download_lora_weights(repo_id, filename=None):
+    """Download LoRA weights from Hugging Face Hub"""
+    try:
+        logger.info(f"Downloading LoRA weights from {repo_id}")
+        if filename:
+            local_path = huggingface_hub.hf_hub_download(
+                repo_id=repo_id,
+                filename=filename,
+                local_dir=LORA_DIR,
+                local_dir_use_symlinks=False
+            )
+        else:
+            # Download all files from the repo
+            local_path = huggingface_hub.snapshot_download(
+                repo_id=repo_id,
+                local_dir=os.path.join(LORA_DIR, repo_id.split('/')[-1]),
+                local_dir_use_symlinks=False
+            )
+        logger.info(f"LoRA weights downloaded to {local_path}")
+        return local_path
+    except Exception as e:
+        logger.error(f"Error downloading LoRA weights: {str(e)}")
+        return None
 
 def convert_video_for_gradio(input_path):
     """Convert video to a format that Gradio can handle using system ffmpeg."""
@@ -118,10 +146,28 @@ def process_with_status(image, prompt, resolution_label, task, num_inference_ste
             "--sample_guiding_scale", str(float(sample_guiding_scale))
         ]
 
-        # Add LoRA parameters if provided
-        if lora_weights and os.path.exists(lora_weights):
-            command.extend(["--lora_weights", lora_weights])
-            command.extend(["--lora_scale", str(float(lora_scale))])
+        # Handle LoRA weights
+        if lora_weights:
+            if lora_weights.startswith("hf://"):
+                # Extract repo_id and filename from the path
+                path_parts = lora_weights[5:].split("/")
+                repo_id = "/".join(path_parts[:2])
+                filename = path_parts[2] if len(path_parts) > 2 else None
+                
+                # Download LoRA weights
+                local_path = download_lora_weights(repo_id, filename)
+                if local_path:
+                    command.extend(["--lora_weights", local_path])
+                    command.extend(["--lora_scale", str(float(lora_scale))])
+                    logger.info(f"Using LoRA weights from {local_path}")
+                else:
+                    logger.warning("Failed to download LoRA weights, proceeding without LoRA")
+            elif os.path.exists(lora_weights):
+                command.extend(["--lora_weights", lora_weights])
+                command.extend(["--lora_scale", str(float(lora_scale))])
+                logger.info(f"Using local LoRA weights from {lora_weights}")
+            else:
+                logger.warning(f"LoRA weights path {lora_weights} not found, proceeding without LoRA")
 
         # Add image parameter only for image2video task
         if task == "Image2Video":
@@ -339,8 +385,8 @@ with gr.Blocks(theme=gr.themes.Soft(), css=custom_css) as demo:
 
                 lora_weights = gr.Textbox(
                     label="LoRA Weights Path",
-                    placeholder="Path to LoRA weights file (optional)",
-                    info="Path to LoRA weights file"
+                    placeholder="Enter Hugging Face path (e.g., hf://username/repo/filename.safetensors) or local path",
+                    info="Enter Hugging Face path (hf://username/repo/filename.safetensors) or local path to LoRA weights"
                 )
 
                 lora_scale = gr.Slider(
