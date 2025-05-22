@@ -63,7 +63,7 @@ def _validate_args(args):
 
     # The default number of frames are 1 for text-to-image tasks and 81 for other tasks.
     if args.frame_num is None:
-        args.frame_num = 1 if "t2i" in args.task else 81
+        args.frame_num = args.num_frames if args.num_frames is not None else (1 if "t2i" in args.task else 81)
 
     # T2I frame_num check
     if "t2i" in args.task:
@@ -206,6 +206,36 @@ def _parse_args():
         type=float,
         default=5.0,
         help="Classifier free guidance scale.")
+    parser.add_argument(
+        "--num_frames",
+        type=int,
+        default=24,
+        help="Number of frames to generate.")
+    parser.add_argument(
+        "--fps",
+        type=int,
+        default=8,
+        help="Frames per second for the output video.")
+    parser.add_argument(
+        "--speed",
+        type=float,
+        default=1.0,
+        help="Speed multiplier for the output video.")
+    parser.add_argument(
+        "--sample_guiding_scale",
+        type=float,
+        default=2.5,
+        help="Guiding scale for sampling.")
+    parser.add_argument(
+        "--lora_weights",
+        type=str,
+        default=None,
+        help="Path to LoRA weights file.")
+    parser.add_argument(
+        "--lora_scale",
+        type=float,
+        default=1.0,
+        help="Scale factor for LoRA weights.")
 
     args = parser.parse_args()
 

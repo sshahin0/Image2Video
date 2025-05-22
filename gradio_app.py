@@ -77,7 +77,8 @@ def convert_video_for_gradio(input_path):
         logger.error(f"Error in convert_video_for_gradio: {str(e)}")
         return input_path
 
-def process_with_status(image, prompt, resolution_label, task, num_inference_steps, seed, flow_shift):
+def process_with_status(image, prompt, resolution_label, task, num_inference_steps, seed, flow_shift, 
+                       fps, speed, sample_guiding_scale, lora_weights, lora_scale):
     try:
         # Map the resolution label to the actual value
         resolution = RESOLUTION_MAP[resolution_label]
@@ -109,8 +110,16 @@ def process_with_status(image, prompt, resolution_label, task, num_inference_ste
             "--save_file", output_video,
             "--sample_steps", str(num_inference_steps),
             "--base_seed", str(int(seed)),
-            "--sample_shift", str(flow_shift)
+            "--sample_shift", str(float(flow_shift)),
+            "--fps", str(int(fps)),
+            "--speed", str(float(speed)),
+            "--sample_guiding_scale", str(float(sample_guiding_scale))
         ]
+
+        # Add LoRA parameters if provided
+        if lora_weights and os.path.exists(lora_weights):
+            command.extend(["--lora_weights", lora_weights])
+            command.extend(["--lora_scale", str(float(lora_scale))])
 
         # Add image parameter only for image2video task
         if task == "Image2Video":
@@ -118,6 +127,7 @@ def process_with_status(image, prompt, resolution_label, task, num_inference_ste
             img = Image.open(image).convert("RGB")
             img.save(input_image)
             command.extend(["--image", input_image])
+            command.extend(["--frame_num", "81"])  # Set frame_num to 81 for image2video task
             logger.info(f"Input image saved to: {input_image}")
 
         logger.info(f"Running command: {' '.join(command)}")
@@ -183,6 +193,32 @@ def process_with_status(image, prompt, resolution_label, task, num_inference_ste
         logger.error(f"Error in process_with_status: {str(e)}")
         return None, f"Error: {str(e)}"
 
+def validate_flow_shift(flow_shift, resolution):
+    """Validate flow_shift based on resolution"""
+    if "480" in resolution:
+        return min(max(flow_shift, 0.1), 3.0)
+    return min(max(flow_shift, 0.1), 10.0)
+
+def validate_inference_steps(steps):
+    """Validate inference steps"""
+    return min(max(steps, 1), 100)
+
+def validate_fps(fps):
+    """Validate FPS"""
+    return min(max(fps, 1), 30)
+
+def validate_speed(speed):
+    """Validate speed multiplier"""
+    return min(max(speed, 0.1), 2.0)
+
+def validate_guiding_scale(scale):
+    """Validate guiding scale"""
+    return min(max(scale, 0.1), 10.0)
+
+def validate_lora_scale(scale):
+    """Validate LoRA scale"""
+    return min(max(scale, 0.1), 2.0)
+
 # Custom CSS for Replicate-like styling
 custom_css = """
 .gradio-container {
@@ -242,32 +278,74 @@ with gr.Blocks(theme=gr.themes.Soft(), css=custom_css) as demo:
                 choices=list(RESOLUTION_MAP.keys()),
                 value="Horizontal (832x480)",
                 label="Video Resolution",
-                info="Select the desired output resolution"
+                info="Select the desired output resolution (480p recommended for better performance)"
             )
             
             with gr.Accordion("Advanced Settings", open=False):
                 num_inference_steps = gr.Slider(
                     minimum=1,
-                    maximum=50,
-                    value=20,
+                    maximum=100,
+                    value=40,
                     step=1,
-                    label="Number of Sampling Steps",
-                    info="Higher values may improve quality but take longer"
+                    label="Number of Inference Steps",
+                    info="More steps generally produce better quality but take longer"
                 )
                 
                 seed = gr.Number(
                     value=-1,
                     label="Seed",
-                    info="Use -1 for random seed, or enter a specific number for reproducible results"
+                    info="Set to -1 for random seed"
                 )
                 
                 flow_shift = gr.Slider(
-                    minimum=1.0,
-                    maximum=16.0,
+                    minimum=0.1,
+                    maximum=10.0,
+                    value=3.0,
+                    step=0.1,
+                    label="Flow Shift",
+                    info="Controls the flow matching scheduler shift factor (3.0 recommended for 480p)"
+                )
+
+                fps = gr.Slider(
+                    minimum=1,
+                    maximum=30,
+                    value=8,
+                    step=1,
+                    label="FPS",
+                    info="Frames per second for the output video"
+                )
+
+                speed = gr.Slider(
+                    minimum=0.1,
+                    maximum=2.0,
+                    value=1.0,
+                    step=0.1,
+                    label="Speed",
+                    info="Speed multiplier for the output video"
+                )
+
+                sample_guiding_scale = gr.Slider(
+                    minimum=0.1,
+                    maximum=10.0,
                     value=5.0,
                     step=0.1,
-                    label="Sample Shift",
-                    info="Controls the amount of motion in the generated video"
+                    label="Sample Guiding Scale",
+                    info="Guiding scale for sampling"
+                )
+
+                lora_weights = gr.Textbox(
+                    label="LoRA Weights Path",
+                    placeholder="Path to LoRA weights file (optional)",
+                    info="Path to LoRA weights file"
+                )
+
+                lora_scale = gr.Slider(
+                    minimum=0.1,
+                    maximum=2.0,
+                    value=1.0,
+                    step=0.1,
+                    label="LoRA Scale",
+                    info="Scale factor for LoRA weights"
                 )
             
             run_btn = gr.Button("Generate Video", variant="primary", size="large")
@@ -290,15 +368,72 @@ with gr.Blocks(theme=gr.themes.Soft(), css=custom_css) as demo:
     def update_interface(task):
         return gr.Image(visible=(task == "Image2Video"))
 
+    def validate_all_params(flow_shift, resolution, num_inference_steps, fps, speed, sample_guiding_scale, lora_scale, task):
+        """Validate all parameters before generation"""
+        flow_shift = validate_flow_shift(flow_shift, resolution)
+        num_inference_steps = validate_inference_steps(num_inference_steps)
+        fps = validate_fps(fps)
+        speed = validate_speed(speed)
+        sample_guiding_scale = validate_guiding_scale(sample_guiding_scale)
+        lora_scale = validate_lora_scale(lora_scale)
+        return flow_shift, num_inference_steps, fps, speed, sample_guiding_scale, lora_scale
+
     task.change(
         fn=update_interface,
         inputs=[task],
         outputs=[image]
     )
 
+    flow_shift.change(
+        fn=validate_flow_shift,
+        inputs=[flow_shift, resolution],
+        outputs=[flow_shift]
+    )
+
+    resolution.change(
+        fn=validate_flow_shift,
+        inputs=[flow_shift, resolution],
+        outputs=[flow_shift]
+    )
+
+    num_inference_steps.change(
+        fn=validate_inference_steps,
+        inputs=[num_inference_steps],
+        outputs=[num_inference_steps]
+    )
+
+    fps.change(
+        fn=validate_fps,
+        inputs=[fps],
+        outputs=[fps]
+    )
+
+    speed.change(
+        fn=validate_speed,
+        inputs=[speed],
+        outputs=[speed]
+    )
+
+    sample_guiding_scale.change(
+        fn=validate_guiding_scale,
+        inputs=[sample_guiding_scale],
+        outputs=[sample_guiding_scale]
+    )
+
+    lora_scale.change(
+        fn=validate_lora_scale,
+        inputs=[lora_scale],
+        outputs=[lora_scale]
+    )
+
     run_btn.click(
+        fn=validate_all_params,
+        inputs=[flow_shift, resolution, num_inference_steps, fps, speed, sample_guiding_scale, lora_scale, task],
+        outputs=[flow_shift, num_inference_steps, fps, speed, sample_guiding_scale, lora_scale]
+    ).then(
         fn=process_with_status,
-        inputs=[image, prompt, resolution, task, num_inference_steps, seed, flow_shift],
+        inputs=[image, prompt, resolution, task, num_inference_steps, seed, flow_shift, 
+               fps, speed, sample_guiding_scale, lora_weights, lora_scale],
         outputs=[output_video, status_text],
         api_name="generate_video",
         queue=True
