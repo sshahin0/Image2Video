@@ -6,6 +6,7 @@ import subprocess
 from pillow_heif import register_heif_opener
 import logging
 import sys
+import time
 
 # Set up logging to show in IDE
 logging.basicConfig(
@@ -80,6 +81,7 @@ def convert_video_for_gradio(input_path):
 def process_with_status(image, prompt, resolution_label, task, num_inference_steps, seed, flow_shift, 
                        fps, speed, sample_guiding_scale, lora_weights, lora_scale):
     try:
+        start_time = time.time()  # Start timing
         # Map the resolution label to the actual value
         resolution = RESOLUTION_MAP[resolution_label]
         logger.info(f"Starting video generation - Task: {task}, Resolution: {resolution}")
@@ -161,7 +163,8 @@ def process_with_status(image, prompt, resolution_label, task, num_inference_ste
                     try:
                         step_count = int(line.split("step")[1].split("/")[0].strip())
                         progress = (step_count / total_steps) * 100
-                        status = f"Generation progress: {progress:.1f}% ({step_count}/{total_steps} steps)\n{line}"
+                        elapsed_time = time.time() - start_time
+                        status = f"Generation progress: {progress:.1f}% ({step_count}/{total_steps} steps)\nElapsed time: {elapsed_time:.1f}s\n{line}"
                     except:
                         status = line
                 else:
@@ -180,9 +183,10 @@ def process_with_status(image, prompt, resolution_label, task, num_inference_ste
             # Convert video to Gradio-compatible format
             converted_video = convert_video_for_gradio(output_video)
             if converted_video and os.path.exists(converted_video):
+                total_time = time.time() - start_time
                 logger.info(f"Video converted successfully: {converted_video}")
-                yield converted_video, f"Video converted successfully: {converted_video}"
-                return converted_video, "Video generation completed successfully!"
+                yield converted_video, f"Video converted successfully: {converted_video}\nTotal generation time: {total_time:.1f}s"
+                return converted_video, f"Video generation completed successfully!\nTotal generation time: {total_time:.1f}s"
             else:
                 logger.error("Video conversion failed")
                 return None, "Error: Video conversion failed"
