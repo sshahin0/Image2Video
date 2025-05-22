@@ -9,6 +9,8 @@ import sys
 import time
 import huggingface_hub
 from pathlib import Path
+import glob
+import shutil
 
 # Set up logging to show in IDE
 logging.basicConfig(
@@ -24,10 +26,17 @@ logger = logging.getLogger(__name__)
 # Register HEIF opener with PIL
 register_heif_opener()
 
-OUTPUT_DIR = "outputs"
-LORA_DIR = "lora_weights"
+# Get absolute paths for directories
+WORKSPACE_DIR = os.path.abspath(os.path.dirname(__file__))
+OUTPUT_DIR = os.path.join(WORKSPACE_DIR, "outputs")
+LORA_DIR = os.path.join(WORKSPACE_DIR, "lora_weights")
+
+# Create directories if they don't exist
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(LORA_DIR, exist_ok=True)
+
+logger.info(f"Output directory: {OUTPUT_DIR}")
+logger.info(f"LoRA weights directory: {LORA_DIR}")
 
 # Define resolution mappings
 RESOLUTION_MAP = {
@@ -47,29 +56,81 @@ CHECKPOINT_MAP = {
     "Image2Video": "./Wan2.1-I2V-14B-720P"
 }
 
-def download_lora_weights(repo_id, filename=None):
-    """Download LoRA weights from Hugging Face Hub"""
+def get_downloaded_loras():
+    """Get list of downloaded LoRA weights"""
+    lora_files = []
+    # Search for safetensors files in LORA_DIR and its subdirectories
+    for file in glob.glob(os.path.join(LORA_DIR, "**/*.safetensors"), recursive=True):
+        # Get relative path from LORA_DIR
+        rel_path = os.path.relpath(file, LORA_DIR)
+        lora_files.append(rel_path)
+        logger.info(f"Found LoRA file: {rel_path}")
+    return sorted(lora_files)  # Sort the list for better organization
+
+def download_lora_weights(url):
+    """Download LoRA weights from Hugging Face URL"""
     try:
-        logger.info(f"Downloading LoRA weights from {repo_id}")
-        if filename:
-            local_path = huggingface_hub.hf_hub_download(
-                repo_id=repo_id,
-                filename=filename,
-                local_dir=LORA_DIR,
-                local_dir_use_symlinks=False
-            )
+        logger.info(f"Downloading LoRA weights from {url}")
+        
+        # Extract repo_id and filename from the URL
+        if "huggingface.co" in url:
+            # Handle direct file URLs
+            if "/resolve/main/" in url:
+                parts = url.split("/resolve/main/")
+                repo_id = parts[0].split("huggingface.co/")[1]
+                filename = parts[1]
+            # Handle repository URLs
+            else:
+                parts = url.split("huggingface.co/")[1].split("/")
+                repo_id = "/".join(parts[:2])
+                filename = parts[-1] if len(parts) > 2 else None
+
+            logger.info(f"Extracted repo_id: {repo_id}, filename: {filename}")
+
+            # Create a unique directory for this repo
+            repo_dir = os.path.join(LORA_DIR, repo_id.replace("/", "_"))
+            os.makedirs(repo_dir, exist_ok=True)
+            logger.info(f"Created directory for repo: {repo_dir}")
+
+            if filename:
+                # Download specific file
+                local_path = huggingface_hub.hf_hub_download(
+                    repo_id=repo_id,
+                    filename=filename,
+                    local_dir=repo_dir,
+                    local_dir_use_symlinks=False,
+                    force_download=True
+                )
+            else:
+                # Download all files from the repo
+                local_path = huggingface_hub.snapshot_download(
+                    repo_id=repo_id,
+                    local_dir=repo_dir,
+                    local_dir_use_symlinks=False,
+                    force_download=True
+                )
+            
+            logger.info(f"LoRA weights downloaded to {local_path}")
+
+            # Verify the file exists
+            if os.path.exists(local_path):
+                logger.info(f"Successfully verified file exists at {local_path}")
+                return local_path
+            else:
+                logger.error(f"File not found at {local_path}")
+                return None
         else:
-            # Download all files from the repo
-            local_path = huggingface_hub.snapshot_download(
-                repo_id=repo_id,
-                local_dir=os.path.join(LORA_DIR, repo_id.split('/')[-1]),
-                local_dir_use_symlinks=False
-            )
-        logger.info(f"LoRA weights downloaded to {local_path}")
-        return local_path
+            logger.error("Invalid Hugging Face URL")
+            return None
     except Exception as e:
         logger.error(f"Error downloading LoRA weights: {str(e)}")
         return None
+
+def update_lora_list():
+    """Update the list of downloaded LoRA weights"""
+    loras = get_downloaded_loras()
+    logger.info(f"Updated LoRA list with {len(loras)} files")
+    return gr.Dropdown(choices=loras)
 
 def convert_video_for_gradio(input_path):
     """Convert video to a format that Gradio can handle using system ffmpeg."""
@@ -107,7 +168,7 @@ def convert_video_for_gradio(input_path):
         return input_path
 
 def process_with_status(image, prompt, resolution_label, task, num_inference_steps, seed, flow_shift, 
-                       fps, speed, sample_guiding_scale, lora_weights, lora_scale):
+                       fps, speed, sample_guiding_scale, lora_weights, lora_scale, selected_lora):
     try:
         start_time = time.time()  # Start timing
         # Map the resolution label to the actual value
@@ -147,27 +208,26 @@ def process_with_status(image, prompt, resolution_label, task, num_inference_ste
         ]
 
         # Handle LoRA weights
-        if lora_weights:
-            if lora_weights.startswith("hf://"):
-                # Extract repo_id and filename from the path
-                path_parts = lora_weights[5:].split("/")
-                repo_id = "/".join(path_parts[:2])
-                filename = path_parts[2] if len(path_parts) > 2 else None
-                
-                # Download LoRA weights
-                local_path = download_lora_weights(repo_id, filename)
-                if local_path:
-                    command.extend(["--lora_weights", local_path])
-                    command.extend(["--lora_scale", str(float(lora_scale))])
-                    logger.info(f"Using LoRA weights from {local_path}")
-                else:
-                    logger.warning("Failed to download LoRA weights, proceeding without LoRA")
-            elif os.path.exists(lora_weights):
-                command.extend(["--lora_weights", lora_weights])
-                command.extend(["--lora_scale", str(float(lora_scale))])
-                logger.info(f"Using local LoRA weights from {lora_weights}")
-            else:
-                logger.warning(f"LoRA weights path {lora_weights} not found, proceeding without LoRA")
+        lora_path = None
+        if selected_lora:
+            # Use selected LoRA from the list
+            lora_path = os.path.join(LORA_DIR, selected_lora)
+            logger.info(f"Using selected LoRA from: {lora_path}")
+        elif lora_weights:
+            # Download new LoRA weights
+            logger.info(f"Attempting to download new LoRA from: {lora_weights}")
+            lora_path = download_lora_weights(lora_weights)
+            if lora_path:
+                logger.info(f"Successfully downloaded LoRA to: {lora_path}")
+                # Update the dropdown list after successful download
+                update_lora_list()
+
+        if lora_path and os.path.exists(lora_path):
+            command.extend(["--lora_weights", lora_path])
+            command.extend(["--lora_scale", str(float(lora_scale))])
+            logger.info(f"Using LoRA weights from {lora_path}")
+        elif lora_weights or selected_lora:
+            logger.warning("LoRA weights not found, proceeding without LoRA")
 
         # Add image parameter only for image2video task
         if task == "Image2Video":
@@ -383,11 +443,26 @@ with gr.Blocks(theme=gr.themes.Soft(), css=custom_css) as demo:
                     info="Guiding scale for sampling"
                 )
 
-                lora_weights = gr.Textbox(
-                    label="LoRA Weights Path",
-                    placeholder="Enter Hugging Face path (e.g., hf://username/repo/filename.safetensors) or local path",
-                    info="Enter Hugging Face path (hf://username/repo/filename.safetensors) or local path to LoRA weights"
-                )
+                with gr.Group():
+                    gr.Markdown("### LoRA Weights")
+                    with gr.Tabs():
+                        with gr.TabItem("Use Downloaded LoRA"):
+                            selected_lora = gr.Dropdown(
+                                label="Select Downloaded LoRA",
+                                choices=get_downloaded_loras(),
+                                info="Choose from your previously downloaded LoRA weights",
+                                allow_custom_value=True
+                            )
+                            refresh_loras = gr.Button("🔄 Refresh List", size="sm")
+                            gr.Markdown("No LoRA weights downloaded yet. Use the 'Download New LoRA' tab to download some.")
+
+                        with gr.TabItem("Download New LoRA"):
+                            lora_weights = gr.Textbox(
+                                label="LoRA URL",
+                                placeholder="Enter Hugging Face URL (e.g., https://huggingface.co/Remade-AI/Rotate/resolve/main/rotate_20_epochs.safetensors)",
+                                info="Enter the URL of the LoRA weights to download"
+                            )
+                            gr.Markdown("After downloading, switch to 'Use Downloaded LoRA' tab to select the weights.")
 
                 lora_scale = gr.Slider(
                     minimum=0.1,
@@ -476,6 +551,12 @@ with gr.Blocks(theme=gr.themes.Soft(), css=custom_css) as demo:
         outputs=[lora_scale]
     )
 
+    # Add event handler for refreshing LoRA list
+    refresh_loras.click(
+        fn=update_lora_list,
+        outputs=[selected_lora]
+    )
+
     run_btn.click(
         fn=validate_all_params,
         inputs=[flow_shift, resolution, num_inference_steps, fps, speed, sample_guiding_scale, lora_scale, task],
@@ -483,7 +564,7 @@ with gr.Blocks(theme=gr.themes.Soft(), css=custom_css) as demo:
     ).then(
         fn=process_with_status,
         inputs=[image, prompt, resolution, task, num_inference_steps, seed, flow_shift, 
-               fps, speed, sample_guiding_scale, lora_weights, lora_scale],
+               fps, speed, sample_guiding_scale, lora_weights, lora_scale, selected_lora],
         outputs=[output_video, status_text],
         api_name="generate_video",
         queue=True
